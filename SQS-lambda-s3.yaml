@@ -1,0 +1,126 @@
+---
+#Author:Sanu Peter
+#Case:
+# Write a cloud formation template to deploy a lambda function with the following:-
+# 1. An SQS queue which subscribes to a SNS topic based on a particular message type
+# 2. A lambda function which is listening to the SQS Queue (in point 1) events and writing the
+# messages body to s3
+# 3. S3 bucket configured with versioning and lifecycle polices for that data
+# 4 Necessary policies and roles required for this use-case
+
+
+# ####################Resources section##################################
+Resources:
+
+#s3 bucket to place the the SQS messages
+  SQSS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: sanu-lambda-s3
+      AccessControl: PublicReadWrite
+      VersioningConfiguration:
+        Status: Enabled
+    DeletionPolicy: Delete
+
+#Queue to be listened by the lambda function
+  MySQSqueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: "SQSLambdaQueue"
+      VisibilityTimeout: 120
+      DelaySeconds: 0
+      
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !GetAtt MySQSqueue.Arn
+          Protocol: "sqs"
+
+#Lamda function to write SQS message to S3
+  MyLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.7
+      Role: !GetAtt AWSLambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          #!/usr/bin/env python3
+          import boto3
+          import json
+
+          s3 = boto3.client("s3")
+
+          print('loading function')
+          def handler(event,context):
+              print(event)
+              message = event['Records'][0]['body']
+              s3.put_object(
+                  Body=message,
+                  Bucket="sanu-lambda-s3",
+                  ContentType="text/html",
+                  Key="sqs_message"
+              )
+          
+      # Code:
+      #   S3Bucket: peter-s3-sanu
+      #   S3Key: 
+      Handler: index.handler
+
+  MylambdaEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !GetAtt MyLambdaFunction.Arn
+      EventSourceArn: !GetAtt MySQSqueue.Arn
+  
+
+######################################IAM Role############################################
+
+#Lambda execution role
+  AWSLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+          Action:
+          - 'sts:AssumeRole'
+      Policies:
+      - PolicyName: PermissionToLambdaLogs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Effect: Allow
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: PermissionToS3
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action: 
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:ListObject
+            Effect: Allow
+            Resource:
+            - arn:aws:s3:::sanu-lambda-s3
+            - arn:aws:s3:::sanu-lambda-s3/*
+      - PolicyName: PermissionsToSQS
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+              - sqs:*
+            Effect: Allow
+            Resource: !GetAtt MySQSqueue.Arn
+
+##################EOF#####################################
+
